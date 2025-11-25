@@ -1,65 +1,35 @@
-from flask import Flask, send_file, render_template_string
-import io
-import matplotlib
-matplotlib.use("Agg")  # サーバー環境でも描画できるようにする
-import matplotlib.pyplot as plt
-import numpy as np
+import pandas as pd
+from datetime import datetime, date
+# すでに import があれば二重に書かなくてOK
 
-app = Flask(__name__)
+BASE_URL = "http://ik1-420-42083.vs.sakura.ne.jp/~isari/NAICe"
 
-# ---------- トップページ（とりあえず動作確認用） ----------
-@app.route("/")
-def index():
-    return "Sesoko tank data app is running."
-
-
-# ---------- グラフページ（/sgr） ----------
-@app.route("/sgr")
-def sgr_page():
+def load_daily_data(target_date: date, tank="B1"):
     """
-    グラフを埋め込んだ簡単なHTMLを返す
+    指定した日付1日分のCSVを読み込んでDataFrameを返す関数
+    target_date : datetime.date（例：date(2025, 11, 25)）
+    tank        : "B1" / "B2" など。URLのパスに使う想定。
     """
-    html = """
-    <html>
-      <head>
-        <meta charset="utf-8">
-        <title>Sesoko Tank SGR</title>
-      </head>
-      <body>
-        <h2>Sample SGR Graph (dummy)</h2>
-        <img src="/sgr.png" alt="SGR graph">
-      </body>
-    </html>
-    """
-    return render_template_string(html)
+    # 例：2025-11-25 → "20251125"
+    datestr = target_date.strftime("%Y%m%d")
 
+    # ☆ 実際のURLパターンに合わせてここを調整
+    # 例：.../NAICe/B1/20251125.csv という構造を仮定
+    csv_url = f"{BASE_URL}/{tank}/{datestr}.csv"
 
-# ---------- 実際の画像を返すエンドポイント ----------
-@app.route("/sgr.png")
-def sgr_png():
-    """
-    ダミーデータで折れ線グラフを描画してPNGとして返す。
-    後でここを「NAICeのCSV → pandas → グラフ」に差し替える。
-    """
-    # いまはテストなのでダミーデータ
-    x = np.arange(1, 13)  # 月（1〜12）
-    y = np.linspace(0.5, 1.5, 12)  # 適当なS G R っぽい値
+    # pandasはHTTPのCSVをそのまま読める
+    df = pd.read_csv(csv_url)
 
-    fig, ax = plt.subplots(figsize=(6, 4))
-    ax.plot(x, y, marker="o")
-    ax.set_xlabel("Month")
-    ax.set_ylabel("SGR (dummy)")
-    ax.grid(True)
+    return df
 
-    # PNGとしてメモリに保存
-    buf = io.BytesIO()
-    fig.savefig(buf, format="png", bbox_inches="tight")
-    buf.seek(0)
-    plt.close(fig)
+def get_today_B1():
+    today = datetime.now().date()
+    df = load_daily_data(today, tank="B1")
+    return df
 
-    return send_file(buf, mimetype="image/png")
-
-
-if __name__ == "__main__":
-    # ローカルテスト用
-    app.run(debug=True)
+@app.route("/debug_b1")
+def debug_b1():
+    today = datetime.now().date()
+    df = load_daily_data(today, tank="B1")
+    # 先頭5行だけテキストで返す
+    return df.head().to_html()
