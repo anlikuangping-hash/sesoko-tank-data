@@ -1,139 +1,106 @@
 from flask import Flask, send_file, render_template_string
 import io
-import os
-import datetime
+import datetime as dt
+
+import matplotlib
+matplotlib.use("Agg")  # サーバー環境で描画するおまじない
+import matplotlib.pyplot as plt
 
 import requests
 import pandas as pd
 
-import matplotlib
-matplotlib.use("Agg")  # サーバー環境でも描画できるようにする
-import matplotlib.pyplot as plt
-
 app = Flask(__name__)
 
-# ==== NAICe データの設定 ==========================================
-# ベースURL（必要に応じて変更）
-BASE_URL = "http://ik1-420-42083.vs.sakura.ne.jp/~isari/NAICe"
 
-# 今日の日付から CSV ファイル名を作る想定：YYYYMMDD.csv
-def get_today_csv_url():
-    today = datetime.date.today()
-    filename = today.strftime("%Y%m%d") + ".csv"   # 例：20251125.csv
-    return f"{BASE_URL}/{filename}"
-
-def load_today_data():
-    """
-    今日の日付の CSV を NAICe から取得して DataFrame にして返す。
-    DATETIME を datetime 型に変換する。
-    """
-    url = get_today_csv_url()
-    try:
-        r = requests.get(url, timeout=10)
-        r.raise_for_status()
-    except Exception as e:
-        # 何かあれば例外を投げる → 呼び出し側で500を返す
-        raise RuntimeError(f"CSV取得に失敗しました: {e}")
-
-    # CSV を DataFrame に読み込む
-    df = pd.read_csv(io.StringIO(r.text))
-
-    # DATETIME 列を datetime 型に
-    if "DATETIME" in df.columns:
-        df["DATETIME"] = pd.to_datetime(df["DATETIME"])
-    else:
-        raise RuntimeError("CSV に DATETIME 列がありません")
-
-    return df
-
-# ==== ルーティング ===============================================
-
-# トップページ（生存確認用）
+# ---------- トップページ ----------
 @app.route("/")
 def index():
     return "Sesoko tank data app is running.", 200
 
 
-# グラフをまとめて表示するページ
-# 例: https://sesoko-tank-data.onrender.com/sgr
+# ---------- グラフページ（HTML） ----------
 @app.route("/sgr")
 def sgr_page():
     """
-    4つの環境項目（TEMP, DO, PH, SALT）のグラフ画像を
-    <img> タグで並べて表示する簡単なページ。
+    グラフを埋め込んだ簡単なHTMLを返す
     """
     html = """
     <html>
       <head>
         <meta charset="utf-8">
-        <title>Sesoko Tank Data (Today)</title>
+        <title>Sesoko Tank Data</title>
       </head>
       <body>
-        <h2>Today's Tank Environment (Temp / DO / pH / Salinity)</h2>
-        <div>
-          <h3>Temperature</h3>
-          <img src="/plot/temp" alt="Temperature">
-        </div>
-        <div>
-          <h3>Dissolved Oxygen</h3>
-          <img src="/plot/do" alt="DO">
-        </div>
-        <div>
-          <h3>pH</h3>
-          <img src="/plot/ph" alt="pH">
-        </div>
-        <div>
-          <h3>Salinity</h3>
-          <img src="/plot/salt" alt="Salinity">
-        </div>
+        <h2>Sesoko Tank SGR graph</h2>
+        <p>もし画像が見えなければ /sgr.png に直接アクセスしてみてください。</p>
+        <img src="/sgr.png" alt="SGR graph">
       </body>
     </html>
     """
     return render_template_string(html)
 
 
-# 個別のグラフ画像を返すエンドポイント
-@app.route("/plot/<kind>")
-def plot_kind(kind):
+# ---------- グラフ画像（PNG） ----------
+@app.route("/sgr.png")
+def sgr_png():
     """
-    /plot/temp  /plot/do  /plot/ph  /plot/salt
-    のようにアクセスすると、その日の1日分の折れ線グラフPNGを返す。
+    - NAICe の CSV を取りに行く
+    - 読み込めたらそのデータでグラフ
+    - ダメだったらダミーデータでグラフ
     """
-    # kind → CSV上の列名とラベルの対応
-    col_map = {
-        "temp": ("TEMP", "Temperature (°C)"),
-        "do":   ("DO",   "Dissolved Oxygen (mg/L)"),
-        "ph":   ("PH",   "pH"),
-        "salt": ("SALT", "Salinity")
-    }
 
-    if kind not in col_map:
-        return "Unknown plot type", 404
+    # ==== 1) とりあえず「今日の日付のCSV」を取りに行く想定 ====
+    # 例：2025-11-25 → 20251125.csv
+    today = dt.datetime.now(dt.timezone(dt.timedelta(hours=9)))  # JST
+    fname = today.strftime("%Y%m%d") + ".csv"
+    base_url = "http://ik1-420-42083.vs.sakura.ne.jp/~isari/NAICe/"
+    csv_url = base_url + fname
 
-    column_name, ylabel = col_map[kind]
+    use_dummy = False
+    df = None
 
     try:
-        df = load_today_data()
+        res = requests.get(csv_url, timeout=5)
+        if res.status_code == 200:
+            # CSVをDataFrameに読み込み
+            df = pd.read_csv(io.StringIO(res.text))
+        else:
+            use_dummy = True
     except Exception as e:
-        # ここでエラー内容を返しておく（必要ならログだけにしてもOK）
-        return f"Error loading data: {e}", 500
+        print("CSV取得エラー:", e)
+        use_dummy = True
 
-    if column_name not in df.columns:
-        return f"Column {column_name} not found in CSV", 500
+    # ==== 2) グラフ描画 ====
+    fig, ax = plt.subplots(figsize=(6, 4))
 
-    x = df["DATETIME"]
-    y = df[column_name]
+    if (df is not None) and (not use_dummy):
+        try:
+            # DATETIME を時刻に変換して TEMP をプロットする例
+            # （本番では SGR 用の処理に差し替え）
+            if "DATETIME" in df.columns and "TEMP" in df.columns:
+                df["DATETIME"] = pd.to_datetime(df["DATETIME"])
+                ax.plot(df["DATETIME"], df["TEMP"], marker="", linewidth=1)
+                ax.set_xlabel("Time")
+                ax.set_ylabel("Temperature (°C)")
+                ax.set_title(fname)
+            else:
+                # 必要な列が無い場合はダミーにフォールバック
+                use_dummy = True
+        except Exception as e:
+            print("グラフ描画中エラー:", e)
+            use_dummy = True
 
-    # ==== グラフ作成 ====
-    fig, ax = plt.subplots(figsize=(8, 4))
-    ax.plot(x, y, marker=".", linewidth=1)
+    if use_dummy:
+        # ダミーデータ（テスト用）
+        import numpy as np
+        x = np.arange(1, 13)
+        y = np.linspace(0.5, 1.5, 12)
+        ax.plot(x, y, marker="o")
+        ax.set_xlabel("Month")
+        ax.set_ylabel("SGR (dummy)")
+        ax.set_title("Dummy SGR")
 
-    ax.set_xlabel("Time")
-    ax.set_ylabel(ylabel)
     ax.grid(True)
-
-    # x軸のラベルを少し見やすく（自動調整）
-    fig.autofmt_xdate()
 
     # PNGとしてメモリに保存
     buf = io.BytesIO()
@@ -144,8 +111,6 @@ def plot_kind(kind):
     return send_file(buf, mimetype="image/png")
 
 
-# ローカルテスト用
 if __name__ == "__main__":
-    # VSCode などで python app.py を実行したとき用
-    # （Render では gunicorn app:app が使われる）
+    # ローカルテスト用（Renderでは gunicorn app:app が使われる）
     app.run(debug=True)
